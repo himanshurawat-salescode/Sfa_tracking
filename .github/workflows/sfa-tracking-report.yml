@@ -1,0 +1,86 @@
+name: SFA Tracking Report - Daily 7AM IST
+
+on:
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Calculate yesterday's date (n-1)
+        id: dates
+        run: |
+          YESTERDAY=$(date -u -d "yesterday" '+%Y-%m-%d')
+          echo "yesterday=$YESTERDAY" >> $GITHUB_OUTPUT
+          echo "Running report for date: $YESTERDAY"
+
+      - name: Call SFA Tracking API
+        id: api_call
+        run: |
+          YESTERDAY="${{ steps.dates.outputs.yesterday }}"
+          RESPONSE=$(curl --silent --show-error --write-out "\n__HTTP_STATUS__%{http_code}" \
+            --location 'https://datastream.salescode.ai/schedules/run-with-param' \
+            --header 'X-Tenant-ID: perfettisfai' \
+            --header 'Content-Type: application/json' \
+            --header 'Authorization: Bearer ${{ secrets.API_BEARER_TOKEN }}' \
+            --data "{
+              \"name\": \"sfa_tracking_report\",
+              \"trigger\": \"dailyAt-5:00-ist\",
+              \"filter\": {
+                \"map\": {
+                  \"startDate\": \"$YESTERDAY\",
+                  \"endDate\": \"$YESTERDAY\"
+                }
+              }
+            }")
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "__HTTP_STATUS__" | sed 's/__HTTP_STATUS__//')
+          BODY=$(echo "$RESPONSE" | grep -v "__HTTP_STATUS__")
+          echo "http_status=$HTTP_STATUS" >> $GITHUB_OUTPUT
+          echo "response_body=$BODY" >> $GITHUB_OUTPUT
+          echo "report_date=$YESTERDAY" >> $GITHUB_OUTPUT
+          if [[ "$HTTP_STATUS" -lt 200 || "$HTTP_STATUS" -ge 300 ]]; then
+            echo "API call FAILED with status $HTTP_STATUS"
+            exit 1
+          fi
+
+      - name: Send SUCCESS email
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_APP_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: SFA Report Bot <${{ secrets.EMAIL_USERNAME }}>
+          subject: "✅ SFA Report SUCCESS - ${{ steps.api_call.outputs.report_date }}"
+          body: |
+            SFA Tracking Report ran SUCCESSFULLY.
+            Report Date: ${{ steps.api_call.outputs.report_date }}
+            HTTP Status: ${{ steps.api_call.outputs.http_status }}
+            Response: ${{ steps.api_call.outputs.response_body }}
+            Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Send FAILURE email
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_APP_PASSWORD }}
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: SFA Report Bot <${{ secrets.EMAIL_USERNAME }}>
+          subject: "❌ SFA Report FAILED - ${{ steps.dates.outputs.yesterday }}"
+          body: |
+            SFA Tracking Report FAILED. Please check immediately.
+            Report Date: ${{ steps.dates.outputs.yesterday }}
+            HTTP Status: ${{ steps.api_call.outputs.http_status }}
+            Response: ${{ steps.api_call.outputs.response_body }}
+            Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
