@@ -48,4 +48,4 @@ jobs:
         with:
           name: sfa-report-${{ steps.dates.outputs.yesterday }}
           path: reports/
-          retention-days: 30
+          retention-days: 2
